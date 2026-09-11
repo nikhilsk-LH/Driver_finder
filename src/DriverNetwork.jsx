@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import * as XLSX from "xlsx";
 import Papa from "papaparse";
+import { DEFAULT_ROSTER_CSV } from "./data/defaultRoster.js";
 
 /* ------------------------------------------------------------------ */
 /*  Styling — Netflix palette + glassmorphism in one injected sheet.   */
@@ -32,7 +33,7 @@ const CSS = `
 .brand h1{margin:0; font-size:26px; font-weight:900; letter-spacing:-1.4px}
 .brand h1 span{color:var(--red)}
 .brand small{color:var(--muted); font-weight:600; letter-spacing:.2px}
-.src-chip{display:flex; align-items:center; gap:10px; font-size:13px; color:var(--muted)}
+.src-chip{display:flex; align-items:center; gap:10px; font-size:13px; color:var(--muted); flex-wrap:wrap}
 .src-chip b{color:var(--txt); font-weight:700}
 .linklike{background:none;border:none;color:var(--red);cursor:pointer;font-weight:700;font-size:13px;padding:0}
 .linklike:hover{text-decoration:underline}
@@ -73,13 +74,23 @@ const CSS = `
 .eyebrow{color:var(--muted);font-size:12.5px;font-weight:800;letter-spacing:.6px;margin:0 0 10px}
 .sec{margin-top:26px}
 
-/* facility dropdown */
-.selectwrap{position:relative; max-width:440px}
+/* facility & search controls row */
+.filter-row{display:flex; gap:14px; align-items:center; flex-wrap:wrap}
+.selectwrap{position:relative; flex:1; min-width:260px; max-width:440px}
 .fac-select{appearance:none;-webkit-appearance:none;width:100%;background:transparent;color:var(--txt);
-  border:none;border-radius:16px;padding:16px 46px 16px 18px;font-size:17px;font-weight:800;cursor:pointer;outline:none;letter-spacing:-.3px}
+  border:none;border-radius:16px;padding:16px 46px 16px 18px;font-size:16px;font-weight:800;cursor:pointer;outline:none;letter-spacing:-.3px}
 .fac-select option{background:#141414;color:#fff;font-weight:700}
 .selectwrap::after{content:"";position:absolute;right:20px;top:50%;width:9px;height:9px;border-right:2px solid var(--red);
   border-bottom:2px solid var(--red);transform:translateY(-70%) rotate(45deg);pointer-events:none}
+
+.searchwrap{position:relative; flex:1; min-width:220px}
+.search-input{width:100%; background:transparent; border:none; color:var(--txt); border-radius:16px;
+  padding:16px 18px 16px 42px; font-size:15px; font-weight:600; outline:none}
+.search-input::placeholder{color:var(--muted)}
+.search-icon{position:absolute; left:16px; top:50%; transform:translateY(-50%); color:var(--muted); font-size:16px; pointer-events:none}
+.clear-search{position:absolute; right:14px; top:50%; transform:translateY(-50%); background:rgba(255,255,255,.1);
+  border:none; color:var(--muted); border-radius:50%; width:20px; height:20px; cursor:pointer; display:grid; place-items:center; font-size:12px}
+.clear-search:hover{color:#fff; background:rgba(255,255,255,.2)}
 
 /* driver header */
 .dhead{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-bottom:14px}
@@ -134,36 +145,6 @@ const CSS = `
 `;
 
 /* ------------------------------------------------------------------ */
-/*  Demo network — first/last columns + a few multi-facility drivers.  */
-/* ------------------------------------------------------------------ */
-const FIRST = ["Aarav","Mohammed","James","Daniel","Oliver","Krish","Samuel","Tomasz","Ade","Chen","Ravi","Luca","Ethan","Noah","Ibrahim","George","Marcus","Dmitri","Sanjay","Kofi","Andrei","Hassan","Leo","Ryan","Priya","Amara","Sofia","Grace","Fatima","Hannah","Zara","Nadia","Elena","Bilal","Omar","Jakub","Kwame","Diego","Yusuf","Arjun"];
-const LAST = ["Sharma","Khan","Smith","Nowak","Patel","Adeyemi","Wang","Silva","O'Brien","Kumar","Rossi","Brown","Okafor","Ivanov","Ali","Mensah","Dubois","Nguyen","Kowalski","Reyes","Haddad","Marsh","Bello","Petrov","Costa","Hughes","Sane","Diallo","Fernandez","Osei"];
-const FACS = ["LUX","GSD","WRS","OLD","HDC","DRP"];
-const SHIFTS = ["AM","PM","NGT"];
-
-function buildDemo() {
-  const rows = [];
-  let n = 0;
-  const counts = [["LUX", 11], ["GSD", 9], ["WRS", 8], ["OLD", 7], ["HDC", 9], ["DRP", 6]];
-  counts.forEach(([fac, c]) => {
-    for (let i = 0; i < c; i++) {
-      let facility = fac;
-      if (n % 9 === 4) { const alt = FACS[(n + 2) % FACS.length]; if (alt !== fac) facility = fac + ", " + alt; } // multi-facility driver
-      rows.push({
-        "First Name": FIRST[(n * 7) % FIRST.length],
-        "Last Name": LAST[(n * 13) % LAST.length],
-        "Facility": facility,
-        "Shift": SHIFTS[(n + i) % 3],
-        "Driver ID": "LH-" + (2400 + n),
-        "Phone": "+44 7" + String(300 + ((n * 37) % 699)) + " " + String(100000 + ((n * 5309) % 899999)),
-      });
-      n++;
-    }
-  });
-  return rows;
-}
-
-/* ------------------------------------------------------------------ */
 /*  Column auto-detection                                              */
 /* ------------------------------------------------------------------ */
 function detectColumns(headers, rows) {
@@ -208,44 +189,55 @@ function normalizeRows(raw) {
   return { rows: cleaned, headers: headerSet };
 }
 
-const initials = (name) =>
-  String(name).split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join("").toUpperCase() || "?";
-
 /* ------------------------------------------------------------------ */
 export default function DriverNetwork() {
-  const [rows, setRows] = useState([]);
-  const [headers, setHeaders] = useState([]);
-  const [cols, setCols] = useState({ facility: null, driver: null, lastName: null, shift: null });
+  // Parse bundled database on initialization
+  const defaultParsed = useMemo(() => {
+    const res = Papa.parse(DEFAULT_ROSTER_CSV, { header: true, skipEmptyLines: "greedy" });
+    return normalizeRows(res.data);
+  }, []);
+
+  const defaultCols = useMemo(() => detectColumns(defaultParsed.headers, defaultParsed.rows), [defaultParsed]);
+
+  const [rows, setRows] = useState(() => defaultParsed.rows);
+  const [headers, setHeaders] = useState(() => defaultParsed.headers);
+  const [cols, setCols] = useState(() => defaultCols);
   const [selected, setSelected] = useState("");
-  const [fileName, setFileName] = useState("");
+  const [search, setSearch] = useState("");
+  const [fileName, setFileName] = useState("Driver Database");
+  const [isDefaultDb, setIsDefaultDb] = useState(true);
   const [over, setOver] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [gsUrl, setGsUrl] = useState("");
   const inputRef = useRef(null);
 
-  const finish = useCallback((raw, name) => {
+  const finish = useCallback((raw, name, isDefault = false) => {
     const { rows: r, headers: h } = normalizeRows(raw);
     if (!r.length) { setError("That file has no readable rows. Check it has a header row and try again."); setLoading(false); return; }
     setRows(r); setHeaders(h); setCols(detectColumns(h, r));
-    setFileName(name); setSelected(""); setError(""); setLoading(false);
+    setFileName(name); setIsDefaultDb(isDefault); setSelected(""); setSearch(""); setError(""); setLoading(false);
   }, []);
 
   const fail = useCallback((msg) => { setError(typeof msg === "string" ? msg : (msg?.message || "Could not read that file.")); setLoading(false); }, []);
+
+  const loadDefaultDatabase = useCallback(() => {
+    finish(defaultParsed.rows, "Driver Database", true);
+  }, [defaultParsed, finish]);
 
   const ingest = useCallback((file) => {
     if (!file) return;
     setLoading(true); setError("");
     const name = file.name.toLowerCase();
     if (/\.(csv|tsv|txt)$/.test(name)) {
-      Papa.parse(file, { header: true, skipEmptyLines: "greedy", complete: (res) => finish(res.data, file.name), error: (e) => fail(e) });
+      Papa.parse(file, { header: true, skipEmptyLines: "greedy", complete: (res) => finish(res.data, file.name, false), error: (e) => fail(e) });
     } else if (/\.(xlsx|xls|xlsm)$/.test(name)) {
       const r = new FileReader();
       r.onload = (e) => {
         try {
           const wb = XLSX.read(e.target.result, { type: "array" });
           const ws = wb.Sheets[wb.SheetNames[0]];
-          finish(XLSX.utils.sheet_to_json(ws, { defval: "" }), file.name);
+          finish(XLSX.utils.sheet_to_json(ws, { defval: "" }), file.name, false);
         } catch (err) { fail(err); }
       };
       r.onerror = () => fail(r.error); r.readAsArrayBuffer(file);
@@ -258,12 +250,12 @@ export default function DriverNetwork() {
     setLoading(true); setError("");
     fetch(`https://docs.google.com/spreadsheets/d/${m[1]}/gviz/tq?tqx=out:csv`)
       .then((res) => { if (!res.ok) throw new Error("blocked"); return res.text(); })
-      .then((text) => Papa.parse(text, { header: true, skipEmptyLines: "greedy", complete: (r) => finish(r.data, "Google Sheet") }))
+      .then((text) => Papa.parse(text, { header: true, skipEmptyLines: "greedy", complete: (r) => finish(r.data, "Google Sheet", false) }))
       .catch(() => fail("Couldn't reach that sheet — it may be private. Set link sharing to 'Anyone with the link', or download it as CSV/Excel and upload."));
   }, [gsUrl, finish, fail]);
 
   const onDrop = (e) => { e.preventDefault(); setOver(false); ingest(e.dataTransfer.files?.[0]); };
-  const clearAll = () => { setRows([]); setHeaders([]); setCols({ facility: null, driver: null, lastName: null, shift: null }); setFileName(""); setSelected(""); setError(""); };
+  const clearAll = () => { setRows([]); setHeaders([]); setCols({ facility: null, driver: null, lastName: null, shift: null }); setFileName(""); setIsDefaultDb(false); setSelected(""); setSearch(""); setError(""); };
 
   /* facilities: split each cell so multi-facility drivers count for each site */
   const facilityValues = useCallback((r) => {
@@ -278,8 +270,6 @@ export default function DriverNetwork() {
     rows.forEach((r) => facilityValues(r).forEach((f) => map.set(f, (map.get(f) || 0) + 1)));
     return [...map.entries()].map(([name, count]) => ({ name, count })).sort((a, b) => a.name.localeCompare(b.name));
   }, [rows, cols.facility, facilityValues]);
-
-  const assignedCount = useMemo(() => rows.filter((r) => facilityValues(r).length > 0).length, [rows, facilityValues]);
 
   const fullName = useCallback((r) => {
     const f = String(r[cols.driver] ?? "").trim();
@@ -314,17 +304,21 @@ export default function DriverNetwork() {
     const base = selected === "ALL"
       ? rows.filter((r) => facilityValues(r).length > 0)
       : rows.filter((r) => facilityValues(r).includes(selected));
+
+    const q = search.trim().toLowerCase();
+    const filtered = q ? base.filter((r) => fullName(r).toLowerCase().includes(q)) : base;
+
     // one card per driver — collapse repeated blocks for the same person
     const seen = new Set();
     const unique = [];
-    base.forEach((r) => {
+    filtered.forEach((r) => {
       const key = fullName(r);
       if (seen.has(key)) return;
       seen.add(key);
       unique.push(r);
     });
     return unique.sort((a, b) => fullName(a).localeCompare(fullName(b)));
-  }, [rows, selected, facilityValues, fullName]);
+  }, [rows, selected, facilityValues, fullName, search]);
 
   const detailKeys = useMemo(
     () => headers.filter((h) => ![cols.driver, cols.lastName, cols.facility, cols.shift].includes(h)).slice(0, 4),
@@ -348,8 +342,11 @@ export default function DriverNetwork() {
           {hasData && (
             <div className="src-chip">
               {loading ? <span className="spin" /> : null}
-              <span>Source: <b>{fileName}</b> · {rows.length} rows</span>
-              <button className="linklike" onClick={() => inputRef.current?.click()}>Change</button>
+              <span>Source: <b>{fileName}</b> · {rows.length} records</span>
+              {!isDefaultDb && (
+                <button className="linklike" onClick={loadDefaultDatabase}>Reset to Main Database</button>
+              )}
+              <button className="linklike" onClick={() => inputRef.current?.click()}>Upload File</button>
               <button className="linklike" onClick={clearAll}>Clear</button>
             </div>
           )}
@@ -380,7 +377,7 @@ export default function DriverNetwork() {
             </div>
 
             <div className="cta-row">
-              <button className="btn red" onClick={() => finish(buildDemo(), "Sample network")}>▶ Load sample network</button>
+              <button className="btn red" onClick={loadDefaultDatabase}>▶ Load Main Driver Database</button>
             </div>
 
             {error && <div className="err">{error}</div>}
@@ -389,40 +386,64 @@ export default function DriverNetwork() {
 
         {hasData && (
           <>
-            {/* facility dropdown */}
+            {/* facility & search filter controls */}
             <div className="sec" style={{ marginTop: 6 }}>
-              <p className="eyebrow">SELECT A FACILITY</p>
-              <div className="selectwrap glass">
-                <select className="fac-select" value={selected} onChange={(e) => setSelected(e.target.value)}>
-                  <option value="">Select a facility…</option>
-                  <option value="ALL">All facilities</option>
-                  {facilities.map((f) => <option key={f.name} value={f.name}>{f.name}</option>)}
-                </select>
+              <p className="eyebrow">SELECT A FACILITY / SEARCH</p>
+              <div className="filter-row">
+                <div className="selectwrap glass">
+                  <select className="fac-select" value={selected} onChange={(e) => setSelected(e.target.value)}>
+                    <option value="">Select a facility…</option>
+                    <option value="ALL">All facilities ({facilities.length} sites)</option>
+                    {facilities.map((f) => (
+                      <option key={f.name} value={f.name}>{f.name} ({f.count})</option>
+                    ))}
+                  </select>
+                </div>
+
+                {selected && (
+                  <div className="searchwrap glass">
+                    <span className="search-icon">🔍</span>
+                    <input
+                      className="search-input"
+                      placeholder={`Search driver name in ${selected === "ALL" ? "all sites" : selected}…`}
+                      value={search}
+                      onChange={(e) => setSearch(e.target.value)}
+                    />
+                    {search && (
+                      <button className="clear-search" onClick={() => setSearch("")} title="Clear search">✕</button>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
 
-            {/* drivers */}
+            {/* drivers display */}
             {!selected ? (
               <div className="sec"><div className="empty glass">
                 <b>Select a facility to begin</b>
-                Choose a facility above to see everyone who runs there.
+                Choose a facility above to view assigned drivers, or pick "All facilities" to explore the entire team.
               </div></div>
             ) : (
               <div className="sec">
                 <div className="dhead">
                   <h3>
                     {selected === "ALL" ? "All drivers" : <>Drivers at <span className="tag">{selected}</span></>}{" "}
-                    <span className="c">({inView.length})</span>
+                    <span className="c">({inView.length} driver{inView.length === 1 ? "" : "s"})</span>
                   </h3>
+                  {search && (
+                    <span style={{ fontSize: 13, color: "var(--muted)" }}>
+                      Filtering by "<b>{search}</b>"
+                    </span>
+                  )}
                 </div>
 
                 {inView.length === 0 ? (
                   <div className="empty glass">
-                    <b>No drivers here</b>
-                    This facility has no drivers in the roster.
+                    <b>No drivers found</b>
+                    {search ? `No driver matching "${search}" found in this facility.` : "This facility has no drivers listed."}
                   </div>
                 ) : (
-                  <div className="grid" key={selected}>
+                  <div className="grid" key={selected + (search ? `-${search}` : "")}>
                     {inView.map((r, i) => {
                       const name = fullName(r);
                       const pref = preferred(name);
@@ -430,7 +451,7 @@ export default function DriverNetwork() {
                       const allSites = driverStats.get(name) ? [...driverStats.get(name).keys()] : facilityValues(r);
                       const multi = selected !== "ALL" && allSites.length > 1;
                       return (
-                        <div key={i} className="dcard glass" style={{ animationDelay: Math.min(i * 0.035, 0.5) + "s" }}>
+                        <div key={name + "-" + i} className="dcard glass" style={{ animationDelay: Math.min(i * 0.03, 0.4) + "s" }}>
                           <div className="nameplate">{name}</div>
                           {pref && (
                             <div className="pref"><span className="star">★</span>Preferred facility: <b>{pref.facility}</b></div>
@@ -463,7 +484,7 @@ export default function DriverNetwork() {
           </>
         )}
 
-        <div className="foot">DriverNet · reads your file in the browser — nothing is uploaded to a server.</div>
+        <div className="foot">DriverNet · Built-in database + client-side parser — nothing is uploaded to external servers.</div>
       </div>
     </div>
   );

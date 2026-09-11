@@ -311,8 +311,20 @@ export default function DriverNetwork() {
 
   const inView = useMemo(() => {
     if (!selected) return [];
-    return selected === "ALL" ? rows.filter((r) => facilityValues(r).length > 0) : rows.filter((r) => facilityValues(r).includes(selected));
-  }, [rows, selected, facilityValues]);
+    const base = selected === "ALL"
+      ? rows.filter((r) => facilityValues(r).length > 0)
+      : rows.filter((r) => facilityValues(r).includes(selected));
+    // one card per driver — collapse repeated blocks for the same person
+    const seen = new Set();
+    const unique = [];
+    base.forEach((r) => {
+      const key = fullName(r);
+      if (seen.has(key)) return;
+      seen.add(key);
+      unique.push(r);
+    });
+    return unique.sort((a, b) => fullName(a).localeCompare(fullName(b)));
+  }, [rows, selected, facilityValues, fullName]);
 
   const detailKeys = useMemo(
     () => headers.filter((h) => ![cols.driver, cols.lastName, cols.facility, cols.shift].includes(h)).slice(0, 4),
@@ -415,8 +427,8 @@ export default function DriverNetwork() {
                       const name = fullName(r);
                       const pref = preferred(name);
                       const shiftVal = cols.shift ? r[cols.shift] : null;
-                      const sites = facilityValues(r);
-                      const multi = selected !== "ALL" && sites.length > 1;
+                      const allSites = driverStats.get(name) ? [...driverStats.get(name).keys()] : facilityValues(r);
+                      const multi = selected !== "ALL" && allSites.length > 1;
                       return (
                         <div key={i} className="dcard glass" style={{ animationDelay: Math.min(i * 0.035, 0.5) + "s" }}>
                           <div className="nameplate">{name}</div>
@@ -426,7 +438,7 @@ export default function DriverNetwork() {
                           {(shiftVal || multi) && (
                             <div className="sub">
                               {shiftVal ? <span className="shift-badge">{shiftVal}</span> : null}
-                              {multi ? <span className="multi" title={"Also runs at " + sites.filter((s) => s !== selected).join(", ")}>+{sites.length - 1} more site{sites.length - 1 > 1 ? "s" : ""}</span> : null}
+                              {multi ? <span className="multi" title={"Also runs at " + allSites.filter((s) => s !== selected).join(", ")}>+{allSites.length - 1} more site{allSites.length - 1 > 1 ? "s" : ""}</span> : null}
                             </div>
                           )}
                           {detailKeys.length > 0 && (
